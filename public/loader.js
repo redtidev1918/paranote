@@ -74,7 +74,7 @@
   function generateIdFromUrl(url) {
     const path = new URL(url).pathname;
     // 移除开头和结尾的斜杠，替换特殊字符
-    return path.replace(/^\/|\/$/g, '').replace(/[\/\?#&=]/g, '_') || 'index';
+    return path.replace(/^\/|\/$/g, '').replace(/[/?#&=]/g, '_') || 'index';
   }
 
   /**

@@ -5,7 +5,10 @@ import { createFileStorage } from "./storage-file.js";
 let implementation = null;
 
 export async function initStorage() {
-  const type = process.env.STORAGE_TYPE || "file";
+  // 动态读取 config（延迟加载，避免模块加载顺序影响测试环境的变量设置）
+  const { config } = await import("./config.js");
+  // 优先使用 config（允许 startServer({ storageType }) 程序化覆盖），回退到环境变量
+  const type = config.storageType || process.env.STORAGE_TYPE || "file";
   console.log(`Using storage: ${type}`);
   
   if (type === "mongo") {

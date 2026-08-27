@@ -81,7 +81,7 @@ export default {
         // 鉴权
         const token = request.headers.get("x-paranote-token");
         let secrets = {};
-        try { secrets = JSON.parse(env.SITE_SECRETS || "{}"); } catch {}
+        try { secrets = JSON.parse(env.SITE_SECRETS || "{}"); } catch { /* 忽略解析失败，使用默认值 */ }
         const secret = secrets[siteId];
         
         // 验证 JWT
@@ -141,7 +141,7 @@ export default {
         // 简化鉴权：只用 IP 或 JWT sub
         const token = request.headers.get("x-paranote-token");
         let secrets = {};
-        try { secrets = JSON.parse(env.SITE_SECRETS || "{}"); } catch {}
+        try { secrets = JSON.parse(env.SITE_SECRETS || "{}"); } catch { /* 忽略解析失败，使用默认值 */ }
         const secret = secrets[siteId];
 
         let userId = null;
@@ -187,7 +187,7 @@ export default {
 
         const token = request.headers.get("x-paranote-token");
         let secrets = {};
-        try { secrets = JSON.parse(env.SITE_SECRETS || "{}"); } catch {}
+        try { secrets = JSON.parse(env.SITE_SECRETS || "{}"); } catch { /* 忽略解析失败，使用默认值 */ }
         const secret = secrets[siteId];
 
         let isAdminByJwt = false;
@@ -219,7 +219,7 @@ export default {
         const siteIdParam = url.searchParams.get("siteId"); // GET
         let body = {};
         if (request.method !== "GET") {
-          try { body = await request.json(); } catch {}
+          try { body = await request.json(); } catch { /* 忽略解析失败，使用默认值 */ }
         }
         const siteId = siteIdParam || body.siteId;
 
@@ -227,7 +227,7 @@ export default {
 
         const token = request.headers.get("x-paranote-token");
         let secrets = {};
-        try { secrets = JSON.parse(env.SITE_SECRETS || "{}"); } catch {}
+        try { secrets = JSON.parse(env.SITE_SECRETS || "{}"); } catch { /* 忽略解析失败，使用默认值 */ }
         const secret = secrets[siteId];
 
         let isAdminByJwt = false;

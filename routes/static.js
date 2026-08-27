@@ -8,6 +8,33 @@ import crypto from "node:crypto";
 import { config } from "../config.js";
 import { sendJson, sendFile, sendText, redirect } from "../utils.js";
 
+// ==================== 静态文件缓存 ====================
+
+// file -> { mtimeMs, size, content }；mtime+size 校验，外部修改自动失效
+const staticCache = new Map();
+
+async function readStatic(file) {
+  let st;
+  try {
+    st = await fs.stat(file);
+  } catch {
+    staticCache.delete(file);
+    return null;
+  }
+  const cached = staticCache.get(file);
+  if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+    return cached.content;
+  }
+  try {
+    const content = await fs.readFile(file, "utf8");
+    staticCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, content });
+    return content;
+  } catch {
+    staticCache.delete(file);
+    return null;
+  }
+}
+
 /**
  * 生成管理员设置向导页面
  */
@@ -359,62 +386,62 @@ export async function handleStaticRoutes(req, res, url) {
 
   // embed.js (所有模式)
   if (pathname === "/public/embed.js" || pathname === "/embed.js") {
-    try {
-      const content = await fs.readFile(path.join(config.publicDir, "embed.js"), "utf8");
-      sendFile(res, content, "application/javascript; charset=utf-8", "no-cache");
-    } catch {
+    const content = await readStatic(path.join(config.publicDir, "embed.js"));
+    if (content === null) {
       res.writeHead(404);
       res.end("Not found");
+    } else {
+      sendFile(res, content, "application/javascript; charset=utf-8", "no-cache");
     }
     return true;
   }
 
   // loader.js - 自动加载器 (所有模式)
   if (pathname === "/public/loader.js" || pathname === "/loader.js") {
-    try {
-      const content = await fs.readFile(path.join(config.publicDir, "loader.js"), "utf8");
-      sendFile(res, content, "application/javascript; charset=utf-8", "public, max-age=3600");
-    } catch {
+    const content = await readStatic(path.join(config.publicDir, "loader.js"));
+    if (content === null) {
       res.writeHead(404);
       res.end("Not found");
+    } else {
+      sendFile(res, content, "application/javascript; charset=utf-8", "public, max-age=3600");
     }
     return true;
   }
 
   // 油猴脚本 (所有模式)
   if (pathname === "/paranote.user.js" || pathname === "/public/paranote.user.js") {
-    try {
-      let content = await fs.readFile(path.join(config.publicDir, "paranote.user.js"), "utf8");
-      // 动态替换默认服务器地址
-      const serverUrl = `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host}`;
-      content = content.replace("const DEFAULT_API_BASE = 'http://localhost:4000'", `const DEFAULT_API_BASE = '${serverUrl}'`);
-      sendFile(res, content, "application/javascript; charset=utf-8", "no-cache");
-    } catch {
+    const content = await readStatic(path.join(config.publicDir, "paranote.user.js"));
+    if (content === null) {
       res.writeHead(404);
       res.end("Not found");
+    } else {
+      // 动态替换默认服务器地址
+      const serverUrl = `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host}`;
+      const patched = content.replace("const DEFAULT_API_BASE = 'http://localhost:4000'", `const DEFAULT_API_BASE = '${serverUrl}'`);
+      sendFile(res, patched, "application/javascript; charset=utf-8", "no-cache");
     }
     return true;
   }
 
   // paranote.min.js (所有模式)
   if (pathname === "/dist/paranote.min.js") {
-    try {
-      const content = await fs.readFile(path.join(config.distDir, "paranote.min.js"), "utf8");
-      sendFile(res, content, "application/javascript; charset=utf-8", "public, max-age=3600");
-    } catch {
+    const content = await readStatic(path.join(config.distDir, "paranote.min.js"));
+    if (content === null) {
       res.writeHead(404);
       res.end("Not found");
+    } else {
+      sendFile(res, content, "application/javascript; charset=utf-8", "public, max-age=3600");
     }
     return true;
   }
 
   // 首页 (仅 full 模式)
   if (pathname === "/" && config.deployMode === "full") {
-    try {
-      const content = await fs.readFile(path.join(config.publicDir, "index.html"), "utf8");
-      sendFile(res, content, "text/html; charset=utf-8");
-    } catch {
+    const content = await readStatic(path.join(config.publicDir, "index.html"));
+    if (content === null) {
       sendJson(res, 404, { error: "index_not_found" });
+    } else {
+      sendFile(res, content, "text/html; charset=utf-8");
     }
     return true;
   }
@@ -446,12 +473,12 @@ export async function handleStaticRoutes(req, res, url) {
 
   // 集成文档页面 (所有模式)
   if (pathname === "/docs" || pathname === "/public/docs.html") {
-    try {
-      const content = await fs.readFile(path.join(config.publicDir, "docs.html"), "utf8");
-      sendFile(res, content, "text/html; charset=utf-8");
-    } catch {
+    const content = await readStatic(path.join(config.publicDir, "docs.html"));
+    if (content === null) {
       res.writeHead(404);
       res.end("Not found");
+    } else {
+      sendFile(res, content, "text/html; charset=utf-8");
     }
     return true;
   }
@@ -482,8 +509,13 @@ export async function handleStaticRoutes(req, res, url) {
     }
     
     try {
-      const content = await fs.readFile(path.join(config.publicDir, "admin.html"), "utf8");
-      sendFile(res, content, "text/html; charset=utf-8");
+      const content = await readStatic(path.join(config.publicDir, "admin.html"));
+      if (content === null) {
+        res.writeHead(404);
+        res.end("Not found");
+      } else {
+        sendFile(res, content, "text/html; charset=utf-8");
+      }
     } catch {
       res.writeHead(404);
       res.end("Not found");
@@ -493,12 +525,12 @@ export async function handleStaticRoutes(req, res, url) {
 
   // 阅读器页面 (仅 full/reader 模式)
   if (pathname === "/public/reader.html" && config.deployMode !== "api") {
-    try {
-      const content = await fs.readFile(path.join(config.publicDir, "reader.html"), "utf8");
-      sendFile(res, content, "text/html; charset=utf-8");
-    } catch {
+    const content = await readStatic(path.join(config.publicDir, "reader.html"));
+    if (content === null) {
       res.writeHead(404);
       res.end("Not found");
+    } else {
+      sendFile(res, content, "text/html; charset=utf-8");
     }
     return true;
   }
@@ -527,11 +559,11 @@ export async function handleStaticRoutes(req, res, url) {
 
   // example 页面 (仅 full 模式)
   if (pathname === "/example" && config.deployMode === "full") {
-    try {
-      const content = await fs.readFile(path.join(config.rootDir, "example", "index.html"), "utf8");
-      sendFile(res, content, "text/html; charset=utf-8");
-    } catch {
+    const content = await readStatic(path.join(config.rootDir, "example", "index.html"));
+    if (content === null) {
       sendJson(res, 404, { error: "example_not_found" });
+    } else {
+      sendFile(res, content, "text/html; charset=utf-8");
     }
     return true;
   }

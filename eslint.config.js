@@ -9,7 +9,7 @@ export default [
   },
   {
     languageOptions: {
-      ecmaVersion: 2021,
+      ecmaVersion: "latest",
       sourceType: "module",
       globals: {
         ...globals.browser,
@@ -22,6 +22,17 @@ export default [
       "no-console": "off",
     },
   },
+  {
+    // 油猴脚本运行在 Greasemonkey/Tampermonkey 环境，声明其全局 API
+    files: ["public/paranote.user.js"],
+    languageOptions: {
+      globals: {
+        GM_getValue: "readonly",
+        GM_setValue: "readonly",
+        GM_registerMenuCommand: "readonly",
+        GM_xmlhttpRequest: "readonly",
+        unsafeWindow: "readonly",
+      },
+    },
+  },
 ];
-
-

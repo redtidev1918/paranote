@@ -53,21 +53,19 @@ async function handleRequest(req, res) {
 const server = http.createServer(handleRequest);
 
 // 优雅关闭
-process.on("SIGTERM", () => {
-  console.log("SIGTERM received, shutting down...");
+function shutdown(signal) {
+  console.log(`${signal} received, shutting down...`);
   server.close(() => {
     console.log("Server closed");
     process.exit(0);
   });
-});
+  // 保持长连接（keep-alive）不阻塞关闭
+  server.closeAllConnections?.();
+  setTimeout(() => process.exit(0), 10000).unref();
+}
 
-process.on("SIGINT", () => {
-  console.log("\nSIGINT received, shutting down...");
-  server.close(() => {
-    console.log("Server closed");
-    process.exit(0);
-  });
-});
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 // ==================== 启动 ====================
 

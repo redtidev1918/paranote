@@ -1,5 +1,9 @@
-// 非常简单的文件存储实现，用于 demo。
+// 文件存储实现。
 // 将每个 (siteId, workId, chapterId) 的所有评论存成一个 JSON 数组。
+// 性能优化：
+//   - 内存缓存（mtime+size 校验，外部修改自动失效）
+//   - 每文件写锁（串行化读-改-写，防止并发丢失更新）
+//   - 原子写入（临时文件 + rename，避免崩溃留下半截文件）
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,20 +14,77 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.PARANOTE_DATA_DIR || path.join(__dirname, 'data');
 const BANLIST_FILE = path.join(DATA_DIR, '_banlists.json');
 
-// 黑名单存储辅助函数
-async function readBanlists() {
+// ==================== 目录 ====================
+
+let dirPromise = null;
+function ensureDataDir() {
+  if (!dirPromise) {
+    dirPromise = fs.mkdir(DATA_DIR, { recursive: true }).catch((e) => {
+      dirPromise = null;
+      throw e;
+    });
+  }
+  return dirPromise;
+}
+
+// ==================== 缓存辅助 ====================
+
+// path -> { mtimeMs, size, data }
+const jsonCache = new Map();
+
+async function readJsonCached(file, fallback) {
+  let st;
   try {
-    const txt = await fs.readFile(BANLIST_FILE, "utf8");
-    return JSON.parse(txt);
+    st = await fs.stat(file);
   } catch {
-    return {};
+    jsonCache.delete(file);
+    return fallback;
+  }
+  const cached = jsonCache.get(file);
+  if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+    return cached.data;
+  }
+  try {
+    const data = JSON.parse(await fs.readFile(file, "utf8"));
+    jsonCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, data });
+    return data;
+  } catch {
+    jsonCache.delete(file);
+    return fallback;
   }
 }
 
-async function writeBanlists(data) {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.writeFile(BANLIST_FILE, JSON.stringify(data, null, 2), "utf8");
+async function writeJsonAtomic(file, data) {
+  await ensureDataDir();
+  const tmp = path.join(DATA_DIR, `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
+  try {
+    await fs.writeFile(tmp, JSON.stringify(data), "utf8");
+    await fs.rename(tmp, file);
+    const st = await fs.stat(file);
+    jsonCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, data });
+  } catch (e) {
+    jsonCache.delete(file);
+    throw e;
+  }
 }
+
+// ==================== 每文件互斥锁 ====================
+
+// key -> 尾部 Promise；同一 key 的变更操作串行执行，避免并发读-改-写丢失更新
+const writeQueues = new Map();
+
+function withLock(key, fn) {
+  const tail = (writeQueues.get(key) || Promise.resolve()).catch(() => {});
+  const run = tail.then(fn);
+  const nextTail = run.catch(() => {});
+  writeQueues.set(key, nextTail);
+  nextTail.then(() => {
+    if (writeQueues.get(key) === nextTail) writeQueues.delete(key);
+  });
+  return run;
+}
+
+// ==================== 评论文件 ====================
 
 function getFilePath(siteId, workId, chapterId) {
   const safeName = `${encodeURIComponent(siteId)}__${encodeURIComponent(
@@ -32,127 +93,131 @@ function getFilePath(siteId, workId, chapterId) {
   return path.join(DATA_DIR, safeName);
 }
 
-async function readAll(siteId, workId, chapterId) {
-  const file = getFilePath(siteId, workId, chapterId);
-  try {
-    const txt = await fs.readFile(file, "utf8");
-    return JSON.parse(txt);
-  } catch {
-    return [];
-  }
+function readAll(siteId, workId, chapterId) {
+  return readJsonCached(getFilePath(siteId, workId, chapterId), []);
 }
 
-async function writeAll(siteId, workId, chapterId, comments) {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  const file = getFilePath(siteId, workId, chapterId);
-  await fs.writeFile(file, JSON.stringify(comments), "utf8");
-}
+// ==================== 黑名单文件 ====================
+
+const readBanlists = () => readJsonCached(BANLIST_FILE, {});
 
 export function createFileStorage() {
   return {
     async listComments({ siteId, workId, chapterId }) {
       const all = await readAll(siteId, workId, chapterId);
-      
-      // 分离顶级评论和回复
-      const topLevel = all.filter(c => !c.parentId);
-      const replies = all.filter(c => c.parentId);
-      
-      // 构建回复映射
-      const replyMap = {};
-      for (const reply of replies) {
-        if (!replyMap[reply.parentId]) replyMap[reply.parentId] = [];
-        replyMap[reply.parentId].push(reply);
+
+      // 一次遍历分离顶级评论和回复
+      const topLevel = [];
+      const replyMap = new Map();
+      for (const c of all) {
+        if (c.parentId) {
+          const list = replyMap.get(c.parentId);
+          if (list) list.push(c);
+          else replyMap.set(c.parentId, [c]);
+        } else {
+          topLevel.push(c);
+        }
       }
-      
-      // 为每个评论附加回复（按时间排序）
+
+      // 预解析时间戳，避免比较函数内重复 new Date()
+      const timeOf = (c) => {
+        const t = c.createdAt;
+        if (typeof t === "string") {
+          const n = Date.parse(t);
+          if (!Number.isNaN(n)) return n;
+        }
+        return 0;
+      };
+
+      // 为每个评论附加回复（递归支持多层回复）
       function attachReplies(comment) {
-        const commentReplies = replyMap[comment.id] || [];
-        commentReplies.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+        const commentReplies = replyMap.get(comment.id);
+        if (commentReplies) {
+          commentReplies.sort((a, b) => timeOf(a) - timeOf(b));
+        }
         return {
           ...comment,
-          replies: commentReplies.map(attachReplies),  // 递归支持多层回复
-          replyCount: commentReplies.length,
+          replies: commentReplies ? commentReplies.map(attachReplies) : [],
+          replyCount: commentReplies ? commentReplies.length : 0,
         };
       }
-      
+
       // 顶级评论按热度排序
       topLevel.sort((a, b) => {
         const likesA = a.likes || 0;
         const likesB = b.likes || 0;
         if (likesA !== likesB) return likesB - likesA;
-        return new Date(b.createdAt) - new Date(a.createdAt);
+        return timeOf(b) - timeOf(a);
       });
 
       const grouped = {};
       for (const c of topLevel) {
         const key = String(c.paraIndex);
-        if (!grouped[key]) grouped[key] = [];
-        grouped[key].push(attachReplies(c));
+        const list = grouped[key];
+        if (list) list.push(attachReplies(c));
+        else grouped[key] = [attachReplies(c)];
       }
       return grouped;
     },
 
-    async createComment(data) {
+    createComment(data) {
       const { siteId, workId, chapterId } = data;
-      const all = await readAll(siteId, workId, chapterId);
-      const now = new Date().toISOString();
-
-      // 生成 ID
-      const comment = {
-        id: crypto.randomUUID(),
-        ...data,
-        likes: 0,
-        createdAt: now,
-      };
-
-      all.push(comment);
-      await writeAll(siteId, workId, chapterId, all);
-      return comment;
-    },
-
-    async likeComment({ siteId, workId, chapterId, commentId, userId }) {
-      const all = await readAll(siteId, workId, chapterId);
-      const comment = all.find((c) => c.id === commentId);
-      if (comment) {
-        if (userId) {
-          if (!comment.likedBy) comment.likedBy = [];
-          if (comment.likedBy.includes(userId)) return null;
-          comment.likedBy.push(userId);
-        }
-        
-        comment.likes = (comment.likes || 0) + 1;
-        await writeAll(siteId, workId, chapterId, all);
+      return withLock(getFilePath(siteId, workId, chapterId), async () => {
+        const all = await readAll(siteId, workId, chapterId);
+        const comment = {
+          id: crypto.randomUUID(),
+          ...data,
+          likes: 0,
+          createdAt: new Date().toISOString(),
+        };
+        all.push(comment);
+        await writeJsonAtomic(getFilePath(siteId, workId, chapterId), all);
         return comment;
-      }
-      return null;
+      });
     },
 
-    async deleteComment({ siteId, workId, chapterId, commentId }) {
-      const all = await readAll(siteId, workId, chapterId);
-      const idx = all.findIndex((c) => c.id === commentId);
-      if (idx !== -1) {
-        all.splice(idx, 1);
-        await writeAll(siteId, workId, chapterId, all);
-        return true;
-      }
-      return false;
+    likeComment({ siteId, workId, chapterId, commentId, userId }) {
+      return withLock(getFilePath(siteId, workId, chapterId), async () => {
+        const all = await readAll(siteId, workId, chapterId);
+        const comment = all.find((c) => c.id === commentId);
+        if (comment) {
+          if (userId) {
+            if (!comment.likedBy) comment.likedBy = [];
+            if (comment.likedBy.includes(userId)) return null;
+            comment.likedBy.push(userId);
+          }
+          comment.likes = (comment.likes || 0) + 1;
+          await writeJsonAtomic(getFilePath(siteId, workId, chapterId), all);
+          return comment;
+        }
+        return null;
+      });
+    },
+
+    deleteComment({ siteId, workId, chapterId, commentId }) {
+      return withLock(getFilePath(siteId, workId, chapterId), async () => {
+        const all = await readAll(siteId, workId, chapterId);
+        const idx = all.findIndex((c) => c.id === commentId);
+        if (idx !== -1) {
+          all.splice(idx, 1);
+          await writeJsonAtomic(getFilePath(siteId, workId, chapterId), all);
+          return true;
+        }
+        return false;
+      });
     },
 
     async exportAll() {
       try {
-        await fs.mkdir(DATA_DIR, { recursive: true });
+        await ensureDataDir();
         const files = await fs.readdir(DATA_DIR);
         const allComments = [];
         for (const file of files) {
+          if (file === path.basename(BANLIST_FILE)) continue;
           if (!file.endsWith('.json')) continue;
-          const filePath = path.join(DATA_DIR, file);
-          try {
-             const content = JSON.parse(await fs.readFile(filePath, 'utf8'));
-             if (Array.isArray(content)) {
-               allComments.push(...content);
-             }
-          } catch(e) { 
-              console.error(`Failed to read ${file}`, e); 
+          const comments = await readJsonCached(path.join(DATA_DIR, file), null);
+          if (Array.isArray(comments)) {
+            allComments.push(...comments);
           }
         }
         return allComments;
@@ -164,67 +229,64 @@ export function createFileStorage() {
 
     async importAll(comments) {
       if (!Array.isArray(comments)) throw new Error("Invalid data format: expected array");
-      
+
       // Group by file key
-      const groups = {};
+      const groups = new Map();
       for (const c of comments) {
         if (!c.siteId || !c.workId || !c.chapterId) continue;
-        const key = `${c.siteId}__${c.workId}__${c.chapterId}`; 
-        if (!groups[key]) groups[key] = [];
-        groups[key].push(c);
+        const key = `${c.siteId}__${c.workId}__${c.chapterId}`;
+        const list = groups.get(key);
+        if (list) list.push(c);
+        else groups.set(key, [c]);
       }
 
-      await fs.mkdir(DATA_DIR, { recursive: true });
-      
       let count = 0;
-      for (const [key, list] of Object.entries(groups)) {
-          if (list.length === 0) continue;
-          const { siteId, workId, chapterId } = list[0];
-          const safeName = `${encodeURIComponent(siteId)}__${encodeURIComponent(workId)}__${encodeURIComponent(chapterId)}.json`;
-          const filePath = path.join(DATA_DIR, safeName);
-          
-          let existing = [];
-          try {
-             existing = JSON.parse(await fs.readFile(filePath, 'utf8'));
-          } catch {}
-          
-          const combined = [...existing];
+      for (const [key, list] of groups) {
+        if (list.length === 0) continue;
+        const { siteId, workId, chapterId } = list[0];
+        count += await withLock(getFilePath(siteId, workId, chapterId), async () => {
+          const file = getFilePath(siteId, workId, chapterId);
+          const existing = await readJsonCached(file, []);
+          const byId = new Map(existing.map((c) => [c.id, c]));
+          let changed = false;
           for (const newItem of list) {
-             const idx = combined.findIndex(x => x.id === newItem.id);
-             if (idx !== -1) {
-                 combined[idx] = newItem; 
-             } else {
-                 combined.push(newItem); 
-             }
+            byId.set(newItem.id, newItem);
+            changed = true;
           }
-          
-          await fs.writeFile(filePath, JSON.stringify(combined), 'utf8');
-          count += list.length;
+          if (changed) {
+            await writeJsonAtomic(file, [...byId.values()]);
+          }
+          return list.length;
+        });
       }
       return { success: true, count };
     },
 
     // 黑名单功能
     async banUser({ siteId, targetUserId, reason, bannedBy }) {
-      const banlists = await readBanlists();
-      if (!banlists[siteId]) banlists[siteId] = {};
-      banlists[siteId][targetUserId] = {
-        reason: reason || '',
-        bannedBy,
-        bannedAt: new Date().toISOString(),
-      };
-      await writeBanlists(banlists);
-      return { success: true };
+      return withLock(BANLIST_FILE, async () => {
+        const banlists = await readBanlists();
+        if (!banlists[siteId]) banlists[siteId] = {};
+        banlists[siteId][targetUserId] = {
+          reason: reason || '',
+          bannedBy,
+          bannedAt: new Date().toISOString(),
+        };
+        await writeJsonAtomic(BANLIST_FILE, banlists);
+        return { success: true };
+      });
     },
 
     async unbanUser({ siteId, targetUserId }) {
-      const banlists = await readBanlists();
-      if (banlists[siteId] && banlists[siteId][targetUserId]) {
-        delete banlists[siteId][targetUserId];
-        await writeBanlists(banlists);
-        return { success: true };
-      }
-      return { success: false, error: 'not_found' };
+      return withLock(BANLIST_FILE, async () => {
+        const banlists = await readBanlists();
+        if (banlists[siteId] && banlists[siteId][targetUserId]) {
+          delete banlists[siteId][targetUserId];
+          await writeJsonAtomic(BANLIST_FILE, banlists);
+          return { success: true };
+        }
+        return { success: false, error: 'not_found' };
+      });
     },
 
     async isUserBanned({ siteId, userId }) {

@@ -103,19 +103,27 @@ export function createMongoStorage() {
     async likeComment({ siteId, workId, chapterId, commentId, userId, ip }) {
         if (!CommentModel) throw new Error('MongoDB not initialized');
 
-        const comment = await CommentModel.findOne({ id: commentId });
-        if (!comment) return null;
-
         const identifier = userId || ip;
-        // 检查是否赞过 (简单实现，如果是数组可能很大，但在段落评论场景通常还好)
-        if (comment.likedBy.includes(identifier)) {
-            return comment; // 已经赞过
-        }
 
-        comment.likes += 1;
-        comment.likedBy.push(identifier);
-        await comment.save();
-        return comment;
+        // 原子更新：单条命令完成去重判断和计数，避免并发下的读-改-写竞态
+        const filter = identifier
+            ? { id: commentId, likedBy: { $ne: identifier } }
+            : { id: commentId };
+        const update = {
+            $inc: { likes: 1 },
+            ...(identifier ? { $addToSet: { likedBy: identifier } } : {}),
+        };
+
+        const updated = await CommentModel.findOneAndUpdate(filter, update, { new: true }).lean();
+
+        // 与文件版语义一致：评论不存在或已赞过均返回 null
+        if (!updated) return null;
+
+        return {
+            ...updated,
+            _id: undefined,
+            createdAt: updated.createdAt.toISOString()
+        };
     },
     
     async deleteComment({ siteId, commentId }) {

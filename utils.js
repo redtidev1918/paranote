@@ -3,37 +3,55 @@
  */
 
 import crypto from "node:crypto";
+import zlib from "node:zlib";
 import { config } from "./config.js";
 
 // ==================== HTTP 响应 ====================
 
+// 超过该字节数且客户端支持时启用 gzip（COMPRESS=false 可关闭）
+const COMPRESS_THRESHOLD = 1024;
+
+function acceptsGzip(req) {
+  if (process.env.COMPRESS === "false") return false;
+  const enc = req?.headers?.["accept-encoding"];
+  return typeof enc === "string" && /\bgzip\b/i.test(enc);
+}
+
+function endBody(res, status, headers, body) {
+  if (body.length >= COMPRESS_THRESHOLD && acceptsGzip(res.req)) {
+    const buf = zlib.gzipSync(body);
+    res.writeHead(status, {
+      ...headers,
+      "Content-Encoding": "gzip",
+      Vary: "Accept-Encoding",
+      "Content-Length": buf.length,
+    });
+    res.end(buf);
+  } else {
+    res.writeHead(status, { ...headers, "Content-Length": Buffer.byteLength(body) });
+    res.end(body);
+  }
+}
+
 export function sendJson(res, status, data) {
-  const body = JSON.stringify(data);
-  res.writeHead(status, {
+  endBody(res, status, {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type,X-Paranote-Token,X-Admin-Secret",
-  });
-  res.end(body);
+  }, JSON.stringify(data));
 }
 
 export function sendHtml(res, status, html) {
-  res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
-  res.end(html);
+  endBody(res, status, { "Content-Type": "text/html; charset=utf-8" }, html);
 }
 
 export function sendText(res, status, text) {
-  res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
-  res.end(text);
+  endBody(res, status, { "Content-Type": "text/plain; charset=utf-8" }, text);
 }
 
 export function sendFile(res, content, contentType, cacheControl = "no-cache") {
-  res.writeHead(200, {
-    "Content-Type": contentType,
-    "Cache-Control": cacheControl,
-  });
-  res.end(content);
+  endBody(res, 200, { "Content-Type": contentType, "Cache-Control": cacheControl }, content);
 }
 
 export function redirect(res, location, status = 302) {
@@ -50,6 +68,14 @@ export function parseBody(req, maxSize = config.maxBodySize) {
   }
 
   return new Promise((resolve, reject) => {
+    // 提前拒绝超出大小限制的请求，避免无谓缓冲
+    const declared = parseInt(req.headers["content-length"], 10);
+    if (Number.isFinite(declared) && declared > maxSize) {
+      req.destroy();
+      reject(new Error("payload_too_large"));
+      return;
+    }
+
     let data = "";
     req.on("data", (chunk) => {
       data += chunk;
@@ -158,7 +184,7 @@ export function sanitizeString(str, maxLength = 10000) {
 }
 
 // ID 格式验证：只允许安全字符，防止路径遍历
-const SAFE_ID_PATTERN = /^[a-zA-Z0-9_\-\.]+$/;
+const SAFE_ID_PATTERN = /^[a-zA-Z0-9_.-]+$/;
 const MAX_ID_LENGTH = 200;
 const MAX_CONTENT_LENGTH = 10000;
 const MAX_PARA_INDEX = 100000;
@@ -236,48 +262,51 @@ const MAX_RATE_LIMIT_ENTRIES = 10000; // 防止内存泄漏
 
 export function checkRateLimit(ip) {
   if (!config.rateLimit.enabled) return true;
-  
-  // 防止 IP 欺骗攻击导致内存泄漏
-  if (rateLimitStore.size > MAX_RATE_LIMIT_ENTRIES) {
-    // 清理最旧的一半记录
-    const entries = Array.from(rateLimitStore.entries());
-    entries.sort((a, b) => {
-      const lastA = a[1].requests[a[1].requests.length - 1] || 0;
-      const lastB = b[1].requests[b[1].requests.length - 1] || 0;
-      return lastA - lastB;
-    });
-    const toDelete = entries.slice(0, Math.floor(entries.length / 2));
-    for (const [key] of toDelete) {
-      rateLimitStore.delete(key);
-    }
-  }
-  
+
   const now = Date.now();
   const windowStart = now - config.rateLimit.windowMs;
-  
-  // 清理过期记录
-  const record = rateLimitStore.get(ip) || { requests: [], blocked: false };
-  record.requests = record.requests.filter(t => t > windowStart);
-  
-  if (record.requests.length >= config.rateLimit.maxRequests) {
-    record.blocked = true;
+
+  let record = rateLimitStore.get(ip);
+  if (record) {
+    // delete+set 刷新插入位置，实现近似 LRU
+    rateLimitStore.delete(ip);
     rateLimitStore.set(ip, record);
+    // 原地剪除过期时间戳（时间戳单调递增，前缀即为过期项）
+    const reqs = record.requests;
+    let stale = 0;
+    while (stale < reqs.length && reqs[stale] <= windowStart) stale++;
+    if (stale > 0) reqs.splice(0, stale);
+  } else {
+    record = { requests: [] };
+    rateLimitStore.set(ip, record);
+    // 防止 IP 欺骗攻击导致内存泄漏：按插入顺序淘汰最旧的一批
+    if (rateLimitStore.size > MAX_RATE_LIMIT_ENTRIES) {
+      const evict = Math.floor(MAX_RATE_LIMIT_ENTRIES / 4);
+      let removed = 0;
+      for (const key of rateLimitStore.keys()) {
+        rateLimitStore.delete(key);
+        if (++removed >= evict) break;
+      }
+    }
+  }
+
+  if (record.requests.length >= config.rateLimit.maxRequests) {
     return false;
   }
-  
+
   record.requests.push(now);
-  record.blocked = false;
-  rateLimitStore.set(ip, record);
   return true;
 }
 
 // 定期清理过期记录
 setInterval(() => {
-  const now = Date.now();
-  const windowStart = now - config.rateLimit.windowMs * 2;
+  const windowStart = Date.now() - config.rateLimit.windowMs * 2;
   for (const [ip, record] of rateLimitStore.entries()) {
-    record.requests = record.requests.filter(t => t > windowStart);
-    if (record.requests.length === 0) {
+    const reqs = record.requests;
+    let stale = 0;
+    while (stale < reqs.length && reqs[stale] <= windowStart) stale++;
+    if (stale > 0) reqs.splice(0, stale);
+    if (reqs.length === 0) {
       rateLimitStore.delete(ip);
     }
   }

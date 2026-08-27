@@ -60,30 +60,46 @@ function getHeaders() {
 // ==================== 核心抓取函数 ====================
 
 async function fetchWithHttp(targetUrl) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.fetch.timeout);
+  // config.fetch.maxRetries 控制瞬态失败 (429/5xx/网络错误) 的重试次数
+  const maxRetries = Math.max(0, Number(config.fetch.maxRetries) || 0);
+  let lastErr;
 
-  // 使用 BrowserForge 生成的动态头
-  const headers = getHeaders();
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), config.fetch.timeout);
 
-  try {
-    const resp = await fetch(targetUrl, {
-      headers,
-      signal: controller.signal,
-    });
+    try {
+      const resp = await fetch(targetUrl, {
+        headers: getHeaders(),
+        signal: controller.signal,
+      });
 
-    if (resp.status === 403 || resp.status === 401 || resp.status === 503) {
-      throw new Error(`HTTP ${resp.status}`);
+      if (resp.ok) {
+        return await resp.text();
+      }
+
+      const err = new Error(`HTTP ${resp.status}`);
+      err.status = resp.status;
+      // 429/5xx 可重试；其余 (403/401/404 等) 立即抛出交给 Puppeteer 降级
+      if (resp.status !== 429 && resp.status < 500) {
+        err.nonRetryable = true;
+        throw err;
+      }
+      lastErr = err;
+    } catch (e) {
+      // 超时中止与不可重试错误直接抛出
+      if (e.name === "AbortError" || e.nonRetryable) throw e;
+      if (attempt === maxRetries) throw e;
+      lastErr = e;
+    } finally {
+      clearTimeout(timeout);
     }
 
-    if (!resp.ok) {
-      throw new Error(`HTTP ${resp.status}`);
-    }
-
-    return await resp.text();
-  } finally {
-    clearTimeout(timeout);
+    // 指数退避后重试
+    await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
   }
+
+  throw lastErr;
 }
 
 async function fetchWithPuppeteer(targetUrl) {
@@ -219,7 +235,7 @@ function renderTelegraphNode(node) {
 export async function fetchTelegraph(slug) {
   const apiUrl = `https://api.telegra.ph/getPage/${slug}?return_content=true`;
 
-  const resp = await fetch(apiUrl, { timeout: 10000 });
+  const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(10000) });
   const data = await resp.json();
 
   if (!data.ok) {

@@ -33,7 +33,7 @@ describe('File Storage', () => {
           await fs.unlink(path.join(DATA_DIR, file));
         }
       }
-    } catch {}
+    } catch { /* 目录不存在时忽略 */ }
   });
 
   describe('createComment', () => {
