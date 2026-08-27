@@ -1,0 +1,62 @@
+# 自动发版：推送 v* 标签触发
+# 测试 → 构建 → 通过 Trusted Publishing (OIDC) 发布 npm → 创建 GitHub Release
+#
+# 首次使用需在 npmjs.com 配置 Trusted Publisher：
+#   包页面 → Settings → Trusted Publisher → 填入
+#     Repository:  redtidev1918/paranote
+#     Workflow:    release.yml（须与本文件名一致）
+#     Environment: 留空（如填写则须同步在下方 job 里加 environment: <名称>）
+#
+# 配置后无需 NPM_TOKEN secret：发布凭证由 OIDC 现场签发、短期有效。
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # 创建 GitHub Release
+  id-token: write # npm Trusted Publishing (OIDC) 与 provenance
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  release:
+    name: Publish
+    runs-on: ubuntu-latest # OIDC 仅在 GitHub 托管 Runner 上可用
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24 # 自带 npm 11.x，满足 Trusted Publishing 要求的 >= 11.5.1
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
+        run: npm ci
+
+      - name: Lint & Test
+        run: |
+          npm run lint
+          npm test
+
+      - name: Build embed bundle
+        run: npm run build:embed
+
+      - name: Publish to npm (Trusted Publishing / OIDC)
+        run: npm publish
+
+      - name: Extract version
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+          verify_tag: true

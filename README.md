@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub](https://img.shields.io/github/stars/zoidberg-xgd/paranote?style=social)](https://github.com/zoidberg-xgd/paranote)
 
-**[在线演示](https://zoidbergxgd.pythonanywhere.com/ngVZlqHl/)** (集成在 TapNote 中) | **[npm](https://www.npmjs.com/package/paranote)** | **[GitHub](https://github.com/zoidberg-xgd/paranote)**
+**[npm](https://www.npmjs.com/package/paranote)** | **[GitHub](https://github.com/zoidberg-xgd/paranote)** | **[文档](/docs)**
 
 ## 目录
 
@@ -353,6 +353,10 @@ ParaNote 支持部署到 Vercel Serverless Functions（仅 API 模式）。
 
 ParaNote 提供完全兼容 Edge 环境的重写版本，使用 MongoDB Atlas Data API。
 
+> ⚠️ **注意**: MongoDB Atlas Data API 已被官方[废弃](https://www.mongodb.com/docs/atlas/app-services/data-api/)并逐步停止服务，
+> 新项目请优先考虑 Vercel + MONGO_URI 部署方式，或改用 MongoDB Atlas Functions / 官方驱动。
+> 如仍需使用 Workers 版本，请自行评估 Data API 在你账户下的可用性。
+
 1. **准备**: 在 MongoDB Atlas 开启 [Data API](https://www.mongodb.com/docs/atlas/app-services/data-api/)，获取 URL 和 API Key。
 2. **安装**: `npm install -g wrangler`
 3. **配置**: 修改 `wrangler.toml` 中的 `ATLAS_API_URL` 等变量。
@@ -459,6 +463,45 @@ npm run test:coverage # 覆盖率报告
 npm run lint          # 代码检查
 npm run build:embed   # 构建压缩版 embed.js
 ```
+
+### 自动化发版
+
+项目使用 GitHub Actions 自动发版，推送到 `main` 或提交 PR 时自动运行 lint + 测试（CI）。
+
+发布新版本只需：
+
+```bash
+# 1. 更新版本号（自动改 package.json、打 tag、推送）
+npm version patch   # 或 minor / major
+
+# 2. 推送（postversion 脚本已自动执行，等价于 git push && git push --tags）
+```
+
+推送 `v*` 标签后，发版流水线会自动完成：
+
+1. 运行完整测试套件
+2. 构建 `dist/paranote.min.js`
+3. 通过 npm [Trusted Publishing (OIDC)](https://docs.npmjs.com/trusted-publishers) 发布到 npm
+4. 创建 GitHub Release（自动生成更新日志）
+
+#### 首次配置：npm Trusted Publisher
+
+发布凭证由 OIDC 现场签发、短期有效，**无需配置 `NPM_TOKEN` secret**。首次使用前在 npmjs.com 做一次性绑定：
+
+1. 打开 npm 包页面 → **Settings → Trusted Publisher**
+2. 填入：
+   - **Repository**: `redtidev1918/paranote`
+   - **Workflow filename**: `release.yml`（必须与 `.github/workflows/release.yml` 文件名一致）
+   - **Environment**: 留空（如需额外保护可在 npm 和 workflow 中配置同名 environment）
+3. 保存后，推送 `v*` 标签即可自动发版
+
+要求：workflow 运行在 GitHub 托管 Runner 上，npm CLI ≥ 11.5.1（发版 job 已固定使用 Node 24 自带的 npm 11.x）。
+
+> 当前 npm 包的 owner 为 `zoidberg-xgd` 和 `redtidev1918`，两者均可直接配置 Trusted Publisher 并发布，
+> 无需修改包名。若在新的 fork/账号下发布，需包所有者完成绑定，或将 `name` 改为 scope 包名（如 `@yourname/paranote`）。
+> 不使用 OIDC 时可退回传统方式：仓库 Secret 配置 `NPM_TOKEN`，并给发布步骤加环境变量 `NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}`。
+
+版本更新记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ### 目录结构
 
