@@ -5,7 +5,7 @@
   "type": "module",
   "main": "index.js",
   "bin": {
-    "paranote": "./bin/paranote.js"
+    "paranote": "bin/paranote.js"
   },
   "exports": {
     ".": "./index.js",
@@ -58,11 +58,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/zoidberg-xgd/paranote.git"
+    "url": "git+https://github.com/redtidev1918/paranote.git"
   },
-  "homepage": "https://github.com/zoidberg-xgd/paranote#readme",
+  "homepage": "https://github.com/redtidev1918/paranote#readme",
   "bugs": {
-    "url": "https://github.com/zoidberg-xgd/paranote/issues"
+    "url": "https://github.com/redtidev1918/paranote/issues"
   },
   "engines": {
     "node": ">=20.0.0"

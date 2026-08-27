@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-27
+
 ### 性能优化
 
 - 文件存储增加 mtime 校验的内存缓存，读路径不再每请求读盘解析 JSON（实测约 2-3 倍提升）
@@ -56,7 +58,9 @@
 
 - 首个公开版本：段落级评论服务 + 通用网页阅读器 + Puppeteer 抗反爬
 
-[Unreleased]: https://github.com/zoidberg-xgd/paranote/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/redtidev1918/paranote/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/redtidev1918/paranote/compare/v0.1.3...v0.2.0
+[0.1.3]: https://github.com/zoidberg-xgd/paranote/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/zoidberg-xgd/paranote/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/zoidberg-xgd/paranote/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/zoidberg-xgd/paranote/releases/tag/v0.1.0

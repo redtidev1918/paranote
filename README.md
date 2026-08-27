@@ -4,9 +4,9 @@
 
 [![npm version](https://img.shields.io/npm/v/paranote.svg)](https://www.npmjs.com/package/paranote)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![GitHub](https://img.shields.io/github/stars/zoidberg-xgd/paranote?style=social)](https://github.com/zoidberg-xgd/paranote)
+[![GitHub](https://img.shields.io/github/stars/redtidev1918/paranote?style=social)](https://github.com/redtidev1918/paranote)
 
-**[npm](https://www.npmjs.com/package/paranote)** | **[GitHub](https://github.com/zoidberg-xgd/paranote)** | **[文档](/docs)**
+**[npm](https://www.npmjs.com/package/paranote)** | **[GitHub](https://github.com/redtidev1918/paranote)** | **[文档](/docs)**
 
 ## 目录
 
