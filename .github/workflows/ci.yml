@@ -16,7 +16,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [18, 20, 22]
+        # vitest 4 要求 Node ^20 || ^22 || >=24；发版 job 使用 Node 24（npm >= 11.5.1）
+        node: [20, 22, 24]
     env:
       PUPPETEER_SKIP_DOWNLOAD: "true"
       PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
