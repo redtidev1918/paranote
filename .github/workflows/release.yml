@@ -24,7 +24,7 @@ jobs:
     name: Publish
     runs-on: ubuntu-latest # OIDC 仅在 GitHub 托管 Runner 上可用
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node
         uses: actions/setup-node@v4
