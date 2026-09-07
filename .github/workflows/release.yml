@@ -1,33 +1,59 @@
-# 自动发版：推送 v* 标签触发
-# 测试 → 构建 → 通过 Trusted Publishing (OIDC) 发布 npm → 创建 GitHub Release
-#
-# 首次使用需在 npmjs.com 配置 Trusted Publisher：
-#   包页面 → Settings → Trusted Publisher → 填入
-#     Repository:  redtidev1918/paranote
-#     Workflow:    release.yml（须与本文件名一致）
-#     Environment: 留空（如填写则须同步在下方 job 里加 environment: <名称>）
-#
-# 配置后无需 NPM_TOKEN secret：发布凭证由 OIDC 现场签发、短期有效。
+# 全自动发版，无需 PAT/secret：main 上合入 release-worthy 提交后 release-please 在本
+# 工作流内开/更发版 PR；发版 PR 合并后同一个 run 内发布 npm（Trusted Publishing/OIDC）
+# 并创建 GitHub Release。内置 GITHUB_TOKEN 即可（同 run 内 job 不受「推 tag 不触发新
+# 工作流」限制）。仍支持推 v* tag / workflow_dispatch（需填 tag）重跑。
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要重发布的已有 tag（如 v0.2.1）；main push 自动发版时忽略
+        required: true
+        type: string
 
 permissions:
-  contents: write # 创建 GitHub Release
-  id-token: write # npm Trusted Publishing (OIDC) 与 provenance
+  contents: write        # 推 tag / 建 Release
+  pull-requests: write   # release-please 发版 PR
+  id-token: write        # npm Trusted Publishing (OIDC) 与 provenance
 
 concurrency:
   group: release-${{ github.ref }}
 
 jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      releases_created: ${{ steps.rp.outputs.releases_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release Please
+        id: rp
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
   release:
     name: Publish
     runs-on: ubuntu-latest # OIDC 仅在 GitHub 托管 Runner 上可用
+    needs: release-please
+    if: >-
+      github.event_name != 'push' ||
+      github.ref == 'refs/heads/main' && needs.release-please.outputs.releases_created == 'true' ||
+      startsWith(github.ref, 'refs/tags/')
+    env:
+      RELEASE_TAG: ${{ needs.release-please.outputs.tag_name || inputs.tag || github.ref_name }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name || inputs.tag || github.ref }}
+          fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
         with:
           node-version: 24 # 自带 npm 11.x，满足 Trusted Publishing 要求的 >= 11.5.1
           cache: npm
@@ -50,13 +76,10 @@ jobs:
       - name: Publish to npm (Trusted Publishing / OIDC)
         run: npm publish
 
-      - name: Extract version
-        id: ver
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+      - name: Create/update GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: v${{ steps.ver.outputs.version }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
           generate_release_notes: true
-          verify_tag: true
+          fail_on_unmatched_files: false
