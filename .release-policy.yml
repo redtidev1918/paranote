@@ -1,0 +1,31 @@
+{
+  "kind": "node-library",
+  "versioning": {
+    "mode": "release-please"
+  },
+  "build": {
+    "test": "npm ci && npm run lint && npm test && npm run build:embed",
+    "command": "npm ci && npm run build:embed"
+  },
+  "assets": {
+    "required": [],
+    "optional": []
+  },
+  "registries": {
+    "github": {
+      "required": true
+    },
+    "npm": {
+      "required": true,
+      "publish": "npm publish --provenance --access public",
+      "verify": "npm view paranote@$RELEASE_VERSION version | grep -Fx $RELEASE_VERSION"
+    }
+  },
+  "retention": {
+    "stable": 1,
+    "prerelease": 1,
+    "failed_draft": 2
+  },
+  "checksums": false,
+  "sbom": false
+}
