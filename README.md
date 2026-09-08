@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub](https://img.shields.io/github/stars/redtidev1918/paranote?style=social)](https://github.com/redtidev1918/paranote)
 
-**[npm](https://www.npmjs.com/package/paranote)** | **[GitHub](https://github.com/redtidev1918/paranote)** | **[文档](/docs)**
+**[npm](https://www.npmjs.com/package/paranote)** | **[GitHub](https://github.com/redtidev1918/paranote)** | **[文档](https://redtidev1918.github.io/paranote/)**
 
 ## 目录
 
