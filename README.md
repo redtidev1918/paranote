@@ -355,9 +355,9 @@ ParaNote 支持部署到 Vercel Serverless Functions（仅 API 模式）。
 
 ParaNote 提供完全兼容 Edge 环境的重写版本，使用 MongoDB Atlas Data API。
 
-> ⚠️ **注意**: MongoDB Atlas Data API 已被官方[废弃](https://www.mongodb.com/docs/atlas/app-services/data-api/)并逐步停止服务，
-> 新项目请优先考虑 Vercel + MONGO_URI 部署方式，或改用 MongoDB Atlas Functions / 官方驱动。
-> 如仍需使用 Workers 版本，请自行评估 Data API 在你账户下的可用性。
+注意：MongoDB Atlas Data API 已被官方[废弃](https://www.mongodb.com/docs/atlas/app-services/data-api/)并逐步停止服务，
+新项目请优先考虑 Vercel + MONGO_URI 部署方式，或改用 MongoDB Atlas Functions / 官方驱动。
+如仍需使用 Workers 版本，请自行评估 Data API 在你账户下的可用性。
 
 1. **准备**: 在 MongoDB Atlas 开启 [Data API](https://www.mongodb.com/docs/atlas/app-services/data-api/)，获取 URL 和 API Key。
 2. **安装**: `npm install -g wrangler`
@@ -468,23 +468,19 @@ npm run build:embed   # 构建压缩版 embed.js
 
 ### 自动化发版
 
-项目使用 GitHub Actions 自动发版，推送到 `main` 或提交 PR 时自动运行 lint + 测试（CI）。
+发版由 [release-please](https://github.com/googleapis/release-please) 驱动，不需要 PAT 或任何
+token：
 
-发布新版本只需：
+1. 用 Conventional Commits（`feat:`、`fix:` 等）把改动合入 `main`；`release-please` 会据提交
+   更新 `CHANGELOG.md`、`package.json` 的 `version` 与 `.release-please-manifest.json`，并开出
+   发版 PR。
+2. 审核并合并该发版 PR。同一个 workflow run 内依次：运行完整测试套件 → 构建
+   `dist/paranote.min.js` → 通过 npm
+   [Trusted Publishing (OIDC)](https://docs.npmjs.com/trusted-publishers) 发布到 npm → 创建
+   GitHub Release（自动生成更新日志）。
 
-```bash
-# 1. 更新版本号（自动改 package.json、打 tag、推送）
-npm version patch   # 或 minor / major
-
-# 2. 推送（postversion 脚本已自动执行，等价于 git push && git push --tags）
-```
-
-推送 `v*` 标签后，发版流水线会自动完成：
-
-1. 运行完整测试套件
-2. 构建 `dist/paranote.min.js`
-3. 通过 npm [Trusted Publishing (OIDC)](https://docs.npmjs.com/trusted-publishers) 发布到 npm
-4. 创建 GitHub Release（自动生成更新日志）
+手动重跑：`release.yml` 也支持推送 `v*` 标签，或用 `workflow_dispatch` 填入已有 tag 重跑
+（这两种场景不运行 release-please，其余步骤照常）。CI 的 lint 与测试在 push / PR 时独立运行。
 
 #### 首次配置：npm Trusted Publisher
 
